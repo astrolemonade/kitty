@@ -416,10 +416,6 @@ def init_env(
     vcs_rev: str = '',
 ) -> Env:
     native_optimizations = native_optimizations and not sanitize
-    if native_optimizations and is_macos and is_arm:
-        # see https://github.com/kovidgoyal/kitty/issues/3126
-        # -march=native is not supported when targeting Apple Silicon
-        native_optimizations = False
     cc, ccver = cc_version()
     if verbose:
         print('CC:', cc, ccver)
@@ -447,7 +443,16 @@ def init_env(
     werror = '' if ignore_compiler_warnings else '-pedantic-errors -Werror'
     std = '' if is_openbsd else '-std=c11'
     sanitize_flag = ' '.join(sanitize_args)
-    march = '-march=native' if native_optimizations else ''
+    march = ''
+    if is_macos and is_arm:
+        # see https://github.com/kovidgoyal/kitty/issues/3126
+        # -march=native is not supported when targeting Apple Silicon
+        pass
+    else:
+        if native_optimizations:
+            march = '-march=native -mtune=native'
+        elif sys.maxsize > 2**32 and not is_arm:  # 64 bit Intel
+            march = '-march=x86-64-v2 -mtune=generic'
     cflags_ = os.environ.get(
         'OVERRIDE_CFLAGS', (
             f'-Wextra {float_conversion} -Wno-missing-field-initializers -Wall -Wstrict-prototypes {std}'
