@@ -645,7 +645,9 @@ def get_source_specific_defines(env: Env, src: str) -> Tuple[str, List[str], Opt
             env.vcs_rev = get_vcs_rev()
         return src, [], [f'KITTY_VCS_REV="{env.vcs_rev}"', f'WRAPPED_KITTENS="{wrapped_kittens()}"']
     if src.startswith('3rdparty/base64/'):
-        return src, ['3rdparty/base64',], base64_defines()
+        return src, ['-I3rdparty/base64',], base64_defines()
+    if src.startswith('3rdparty/simdutf/'):
+        return src, ['-Wno-overflow', '-Wno-unused-function'], None
     try:
         return src, [], env.library_paths[src]
     except KeyError:
@@ -751,14 +753,22 @@ def compile_c_extension(
         os.path.join(build_dir, f'{prefix}-{src.replace("/", "-")}.o')
         for src in sources
     ]
+    has_cpp = False
 
     for original_src, dest in zip(sources, objects):
         src = original_src
         cppflags = kenv.cppflags[:]
-        src, include_paths, defines = get_source_specific_defines(kenv, src)
+        src, cflags, defines = get_source_specific_defines(kenv, src)
         if defines is not None:
             cppflags.extend(map(define, defines))
-        cmd = kenv.cc + ['-MMD'] + cppflags + [f'-I{x}' for x in include_paths] + kenv.cflags
+        cmd = kenv.cc + ['-MMD'] + cppflags + kenv.cflags + cflags
+        if src.endswith('.cpp'):
+            idx = cmd.index('-std=c11')
+            if idx < 0:
+                raise SystemExit(f'Could not find ABI flags in cflags: {cmd}')
+            cmd[idx] = '-std=c++17'
+            cmd.remove('-Wstrict-prototypes')
+            has_cpp = True
         cmd += ['-c', src] + ['-o', dest]
         key = CompileKey(original_src, os.path.basename(dest))
         desc = f'Compiling {emphasis(desc_prefix + src)} ...'
@@ -773,6 +783,8 @@ def compile_c_extension(
     unsafe = {'-pthread', '-Werror', '-pedantic-errors'}
     linker_cflags = list(filter(lambda x: x not in unsafe, kenv.cflags))
     cmd = kenv.cc + linker_cflags + kenv.ldflags + objects + kenv.ldpaths + ['-o', dest]
+    if has_cpp:
+        cmd += ['-lstdc++']
 
     def on_success() -> None:
         os.rename(dest, real_dest)
@@ -803,6 +815,8 @@ def find_c_files() -> Tuple[List[str], List[str]]:
     ans.append('3rdparty/base64/lib/tables/tables.c')
     ans.append('3rdparty/base64/lib/codec_choose.c')
     ans.append('3rdparty/base64/lib/lib.c')
+    # simdutf
+    ans.append('3rdparty/simdutf/simdutf.cpp')
     return ans, headers
 
 
